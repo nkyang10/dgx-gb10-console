@@ -1,0 +1,83 @@
+# systemd unit for the DGX Spark node exporter (FastAPI status service)
+# Install to: /etc/systemd/system/dgx-status-exporter.service
+#
+# Design notes:
+#  - Runs the venv python directly (no container) so it can read host /proc,/sys,sysfs
+#    and execute nvidia-smi / dcgmi / nvme-cli on the host.
+#  - Binding the port sanitized: BindingSanitize allows CAP_NET_BIND_SERVICE only for
+#    the LISTEN port so it can bind :80/:9100 without root. We keep >1024 to avoid needing it.
+#  - Token passed via EnvironmentFile (root-only), never on the ExecStart line.
+
+[Unit]
+Description=DGX Status Exporter (FastAPI) - host telemetry API
+Documentation=file:///opt/dgx-status/README.md
+Wants=network-online.target
+After=network-online.target
+# Make sure nv-hostengine / DCGM is up first if relying on dcgmi (optional,
+# otherwise comment out). The exporter itself should not hard-fail if GPU service is down.
+# After=dcgm.service
+
+[Service]
+Type=exec
+User=status
+Group=status
+
+# --- App location & runtime -----------------------------------------------
+WorkingDirectory=/opt/dgx-status
+# Pre-create venv via scripts/install.sh; reference the interpreter directly.
+ExecStart=/opt/dgx-status/.venv/bin/uvicorn \
+    app.main:app \
+    --host 0.0.0.0 \
+    --port ${DGX_STATUS_PORT:-9101} \
+    --workers 1 \
+    --proxy-headers \
+    --access-log
+EnvironmentFile=-/etc/dgx-status/status.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# --- Restart policy ---------------------------------------------------------
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=60
+StartLimitBurst=5
+TimeoutStopSec=10
+KillSignal=SIGTERM
+# graceful shutdown for in-flight requests
+ExecStop=/bin/kill -TERM $MAINPID
+SuccessExitStatus=143
+
+# --- Resource limits ---------------------------------------------------------
+LimitNOFILE=4096
+
+# --- Process isolation / hardening -------------------------------------------
+NoNewPrivileges=yes
+# read-only root fs; venv+app live on /opt (mounted separately as rw via ReadWritePaths)
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/dgx-status /etc/dgx-status /tmp
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+# The exporter must read /proc,/sys,/sysfs and may call nvidia-smi/dcgmi/nvme-cli.
+# Allow mount namespace escape so those host tools work from within our fs namespace.
+# (If collection is pure python reading /proc + /sys, you can drop this.)
+DevicePolicy=closed
+CapabilityBoundingSet=
+
+# --- Journal logging ---------------------------------------------------------
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dgx-status-exporter
+
+[Install]
+WantedBy=multi-user.target

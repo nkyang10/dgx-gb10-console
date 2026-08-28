@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Env / secrets (never commit tokens)
+.env
+*.env
+!*.env.example
+/etc/
+status.env
+
+# Data / runtime
+data/
+*.sqlite
+*.sqlite3
+*.log
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

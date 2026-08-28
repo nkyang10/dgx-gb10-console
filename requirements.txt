@@ -1,0 +1,31 @@
+# requirements.txt — pinned for DGX OS (Ubuntu 24.04 noble, ARM64, Python 3.12)
+#
+# Generate a fully-resolved lock file after a clean install with:
+#   .venv/bin/python -m pip freeze > requirements.lock.txt
+# and reference that in CI / reinstall for byte-identical environments.
+# (Or switch to `uv pip compile requirements.in -o requirements.lock.txt`.)
+#
+# Ranges: lower bounds are safe minimums that support Python 3.12/arm64.
+# --- Web/ASGI server ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0        # [standard] pulls uvloop + websockets + httptools (arm64 wheels exist)
+
+# --- Data modelling ---
+pydantic>=2.8.0
+pydantic-settings>=2.3.0          # typed .env/config loading
+
+# --- Host metric gathering ---
+psutil>=6.0.0                     # cross-platform CPU/mem/disk/net; pure-ish, arm64 wheels
+nvidia-ml-py>=12.550.133          # pynvml bindings for nvidia-smi telemetry (no root needed)
+prometheus-client>=0.20.0         # /metrics exposition format (CPU-only in the default recv)
+
+# --- Realtime/graphs (optional; only if the status API pushes websocket frames) ---
+# python-socketio>=5.11.0         # uncomment only if streaming live plots
+
+# --- CLI/process helpers used by collectors, from host (DO NOT pip install these) ---
+#   nvidia-smi  -> /usr/bin/nvidia-smi  (ships on DGX OS)
+#   nvme-cli    -> /usr/sbin/nvme      (apt: nvme-cli)
+#   lm-sensors  -> /usr/bin/sensors    (apt: lm-sensors; DGX exposes hwmon via spark_hwmon)
+#   ethtool     -> /usr/sbin/ethtool   (apt: ethtool)
+#   ip/lspci    -> /usr/bin/{ip,lspci} (apt: iproute2, pciutils)
+#   dcgmi       -> /usr/bin/dcgmi      (apt: datacenter-gpu-manager)

@@ -1,0 +1,89 @@
+# config.yaml — N 節點 DGX cluster 通用設定（聚合器 + N 台 exporter）
+#
+# 設計：支援 2..N 部 DGX。一部做 aggregator（拉晒其餘），其餘每部做 exporter（leaf）。
+#
+# 網絡拓撲（每部 DGX Spark）：
+#   - 1x 10GbE RJ-45 = management/OOB 網（Node-A/B/C... 插同一個 switch）
+#   - 2x 200GbE QSFP56 (ConnectX-7) = compute fabric（唔用嚟做 mgmt）
+#
+# 角色：
+#   - aggregator: 部機跑 exporter 之餘，仲拉晒 peers.nodes[] 其他部
+#   - exporter   : 只暴露本地 /metrics（leaf）
+# 角色由 env DGX_STATUS_ROLE 覆寫（見 /etc/dgx-status/status.env）；本檔全 cluster 共用。
+
+cluster:
+  name: "dgx-cluster"
+  role: "aggregator"          # aggregator | exporter（本機角色，install.sh/status.env 覆寫）
+  node_id: "dgx-01"           # 本機 id（必須喺 nodes[] 出現）
+  mgmt_cidr: "10.0.20.0/24"   # mgmt 網段（auto-discovery + 來源限制用）
+
+# ---- 全 cluster 節點註冊表（N 台）-----------------------------------------
+# 加多部機 → 喺呢度加一行 + 喺新機執行 install.sh --node-id=<id> --role=exporter
+nodes:
+  - id: "dgx-01"
+    mgmt_ip: "10.0.20.10"
+    role: "aggregator"
+    port: 9101                # 本 exporter 端口
+    vllm_port: 8000           # vLLM API 端口（呢部行嘅 model）
+  - id: "dgx-02"
+    mgmt_ip: "10.0.20.11"
+    role: "exporter"
+    port: 9101
+    vllm_port: 8001           # 獨立 single-TP server 用唔同端口；跨節點 Ray 就同道 8000
+  # - id: "dgx-03"
+  #   mgmt_ip: "10.0.20.12"
+  #   role: "exporter"
+  #   port: 9101
+  #   vllm_port: 8002
+
+# ---- 聚合（aggregator 點拉其餘節點）--------------------------------------
+aggregation:
+  # aggregator 拉邊啲：all-except-self（預設，拉晒 nodes[] 唔係本機嗰啲）
+  # 或明確列：pull: ["dgx-02","dgx-03"]
+  pull: "all-except-self"
+  # 自動發現（可選，預設 off——predictable homelab 用 static nodes[] 最穩）
+  auto_discover: false
+  mcast_group: "224.0.0.251"
+  mcast_port: 5353
+  connect_timeout_s: 5
+  # Agentless SSH fallback（如果某葉唔 run exporter——唔建議，寧願每部都 run exporter）
+  remote_collect:
+    enabled: false
+    ssh_user: "status"
+    ssh_key: "/home/status/.ssh/id_ed25519"
+    ssh_cmd: "ssh -o BatchMode=yes -o ConnectTimeout=5 -i {key} {user}@{host}"
+
+# ---- HTTP 監聽 -------------------------------------------------------------
+http:
+  bind: "0.0.0.0"
+  port: 9101                 # DGX_STATUS_PORT env 覆寫
+  health_path: "/health"
+  metrics_path: "/metrics"
+
+# ---- 認證（token 只喺 /etc/dgx-status/status.env，root 0600）---------------
+auth:
+  token_env: "DGX_STATUS_TOKEN"
+
+# ---- 收集範圍（本機報告啲乜）-----------------------------------------------
+collect:
+  interval_s: 5              # 資料刷新 cadence
+  gpu: true                  # nvidia-smi / pynvml（host）
+  cpu: true                  # /proc/stat、loadavg
+  mem: true                  # /proc/meminfo（UMA）
+  disk: true                 # df + /proc/diskstats（NVMe SMART 另用 nvme_smart_s）
+  net: true                  # /proc/net/dev + ethtool link + RDMA/RoCE counters
+  hwmon: true                # /sys/class/hwmon（spark_hwmon 暴露功率/溫度）
+  vllm: true                 # 撈 vLLM /metrics + /health + /v1/models（Assumption：vLLM 喺 Docker container；用 `docker ps --filter name=vllm` 偵測 + 攞 publish port）
+  processes: false           # per-process top-N（貴，預設 off）
+
+# ---- 三層輪詢 tier（確認自研究 R3）-----------------------------------------
+collect_tiers:
+  fast_s: 5                  # GPU(util/temp/power/clocks)+CPU+RAM+thermal+netdev
+  slow_s: 30                 # docker ps、df、ethtool -S、RDMA counters、systemctl
+  nvme_smart_s: 60           # NVMe SMART（最貴，最慢 tier）
+
+# ---- Prometheus 遠端 scrape（可選）-----------------------------------------
+prometheus:
+  enabled: true
+  scrape_dir: "/var/lib/dgx-status"
+  additional_targets: []     # 額外 scrape targets（urls）

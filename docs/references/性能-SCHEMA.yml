@@ -1,0 +1,58 @@
+# DGX Status API — PERFORMANCE METRIC SCHEMA (VERIFIED)
+# Source: 狀態-08-性能.md (Table 1/2, §3) + 狀態-12 B3. Counter→rate, histogram→quantile over window.
+
+# --- Per-node performance output shape (JSON snapshot, cached, served by /metrics+JSON+WS) ---
+schema:
+  node:
+    vllm:
+      tokens_per_s:             # decode + prefill (rate over ~10s)
+      decode_tokens_per_s:      # rate(generation_tokens)
+      prefill_tokens_per_s:     # rate(prompt_tokens); "computed prefill" = prompt − cached (minus prefix hits)
+      rps:                      # completed req/s = rate(request_success{finished_reason})
+      ttft_avg_s:               # time_to_first_token_seconds _sum/_count
+      ttft_p95_s:               # histogram_quantile(0.95, sum by(le)(rate(..._bucket[5m])))
+      itl_avg_s:                # inter_token_latency_seconds _sum/_count  (TPOT alt name request_time_per_output_token_seconds)
+      itl_p95_s:
+      e2e_avg_s:                # e2e_request_latency_seconds
+      e2e_p95_s:
+      queue_time_avg_s:         # request_queue_time_seconds
+      preemption_rate:          # rate(num_preemptions[5m])
+      prefix_hit_rate:          # rate(prefix_cache_hits) / rate(prefix_cache_queries)
+      kv_cache_usage:           # vllm:kv_cache_usage_perc gauge 0..1 (legacy gpu_cache_usage_perc)
+      kv_cache_headroom:        # 1 - kv_cache_usage_perc
+      engine_state:             # awake | sleeping(L1:weights_offloaded) | sleeping(L2:discard_all) | dead
+    system:
+      net_rx_bps / net_tx_bps:  # /proc/net/dev deltas
+      net_fabric_gbps:          # RoCE HCA hw_counters: 4-byte words ×4 for bytes; NOT netdev
+      disk_iops:                # /proc/diskstats sectors*512/Δt
+      disk_mb_per_s:
+      cpu_pct:                  # /proc/stat busy jiffy delta
+      gpu_util_pct:             # nvidia-smi utilization.gpu
+      mem_psi:                  # /proc/pressure/memory
+
+# --- PromQL derivations (Prometheus path; labels ALL carry model_name+engine → per-model) ---
+derivations:
+  decode_tok_s:     'rate(vllm:generation_tokens_total[5m])'            # legacy _total; modern: vllm:generation_tokens (counter)
+  prefill_tok_s:    'rate(vllm:prompt_tokens_total[5m])'
+  computed_prefill: 'rate(vllm:prompt_tokens[5m]) - rate(vllm:prompt_tokens_cached[5m])'
+  rps:              'rate(vllm:request_success_total{finished_reason!="abort"}[5m])'
+  tput_tok_s:       'rate(vllm:generation_tokens_total[5m]) + rate(vllm:prompt_tokens_total[5m])'
+  ttft_avg_s:       'vllm:time_to_first_token_seconds_sum / clamp_min(vllm:time_to_first_token_seconds_count,1)'
+  ttft_p95_s:       'histogram_quantile(0.95, sum by(le)(rate(vllm:time_to_first_token_seconds_bucket[5m])))'
+  itl_p95_s:        'histogram_quantile(0.95, sum by(le)(rate(vllm:inter_token_latency_seconds_bucket[5m])))'
+  e2e_p95_s:        'histogram_quantile(0.95, sum by(le)(rate(vllm:e2e_request_latency_seconds_bucket[5m])))'
+  prefix_hit_rate:  'rate(vllm:prefix_cache_hits[5m]) / clamp_min(rate(vllm:prefix_cache_queries[5m]),1)'
+  kv_usage_drift:   'vllm:kv_cache_usage_perc - (vllm:kv_cache_usage_perc offset 1h)'   # >=0.02/h meaningful
+
+# --- Recording rules for derived gauges ---
+recording_rules:
+  disk:node_filesystem_ttf_hours: '(1 - predict_linear(node_filesystem_avail_bytes[6h],0)/node_filesystem_size_bytes) / clamp_min(-deriv(node_filesystem_avail_bytes[6h])/node_filesystem_size_bytes,0)'
+  vllm:kv_cache_headroom:         '1 - vllm:kv_cache_usage_perc'
+  node:uma_mem_used_ratio:        '1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes'
+  node:uma_headroom_slope_1h:     'deriv(node_memory_MemAvailable_bytes[1h]) * 3600'
+
+# --- Windows / cadence ---
+scrape: 10–15s (vLLM), fast 2–5s (GPU/CPU/mem), slow 30–60s (systemd/df/ethtool/RDMA), 60–120s (NVMe SMART)
+rate_window: 5m; throughput ~10s; latency ~60s (not 1s instant — noisy).
+counter_reset: on cur<prev treat as engine restart → rate=0, re-baseline.
+histogram: avg=_sum/_count rolling; P95 via _bucket + histogram_quantile.

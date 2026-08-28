@@ -1,0 +1,66 @@
+# docker-compose for the DGX Spark status exporter (containerized path).
+# Preferred deployment is the systemd+venv path (see install.sh --mode=host);
+# container mode is offered for environments that standardize on Docker.
+#
+# The toolkit (nvidia-ctk) is preinstalled on DGX OS but this service does NOT
+# need GPU access — it reads host CPU/mem/disk/network and calls host cli tools.
+# It MUST see the host's /proc,/sys and run with host networking + host binary
+# mounts so it reports the SAME stats the host sees.
+#
+#   docker compose -f deploy/docker-compose.yml up -d
+
+services:
+  dgx-status-exporter:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: dgx-status-exporter:latest
+    container_name: dgx-status-exporter
+    restart: unless-stopped
+    # network_mode host => binds 0.0.0.0:9101 on the host netns, so the
+    # aggregator (Node-A) can reach this exporter at <nodeB-mgmt-ip>:9101.
+    network_mode: host
+    pid: "host"               # read host /proc/<pid> for per-process stats
+    privileged: false
+    cap_add: []
+    environment:
+      - DGX_STATUS_PORT=9101
+      - DGX_STATUS_MODE=container
+      - DGX_STATUS_TOKEN=${DGX_STATUS_TOKEN:?set DGX_STATUS_TOKEN in .env}
+    volumes:
+      - type: bind
+        source: /sys
+        target: /sys
+        read_only: true
+      - type: bind
+        source: /proc
+        target: /proc
+        read_only: true
+      - type: bind
+        source: /sys/class/dmi
+        target: /sys/class/dmi
+        read_only: true
+      # Host cli tools used by collectors (nvidia-smi, nvme-cli, dcmi, lspci, lsblk)
+      # are bind-mounted read-only so the container can exec them with host results.
+      - type: bind
+        source: /usr/bin
+        target: /host/usr/bin
+        read_only: true
+      - type: bind
+        source: /usr/sbin
+        target: /host/usr/sbin
+        read_only: true
+      - type: bind
+        source: /etc
+        target: /host/etc
+        read_only: true
+      # Token/config from host env file
+      - type: bind
+        source: /etc/dgx-status/status.env
+        target: /run/secrets/status.env
+        read_only: true
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    # If you do need nvidia device visibility later (not required now):
+    # #runtime: nvidia  -> only if the image uses GPU; do NOT add --gpus for a host-telemetry collector.

@@ -1,0 +1,170 @@
+# DGX Status API — Monitoring/Alerts + Performance (FINAL, VERIFIED)
+# Sources: 容量預測-A3.md, 安全-監控-alert.md, 狀態-08-性能.md, 狀態-12-深觀察與基準.md,
+#          dgx-spark-monitoring skill + references, Prometheus docs (curl-verified 2026-08-28),
+#          Grafana alerting-on-forecasts (HTTP 200).
+#
+# ⚠️ IMPORTANT CORRECTION (verified): the rules below replace the `DCGM_FI_*` names used in the
+#    earlier 安全-監控-alert.md draft. DCGM is NOT supported on DGX Spark/GB10 (NVIDIA official:
+#    "no plans to support DCGM on Spark"). Rewritten here against node_exporter (`node_*`) and the
+#    DGX collector's own `dgx_*`/`vllm:...` series (nvidia-smi/pynvml-derived). See CORRECTIONS.
+#
+# Metric sources: our exporter (`dgx_*`, parsed nvidia-smi/thermal_zone/hwmon/infiniband),
+#   node_exporter (`node_nvme_*`, `node_filesystem_*`, `node_memory_*`, `node_systemd_*`),
+#   vLLM `/metrics` (`vllm:...`), blackbox (`probe_success`), Prometheus `up`.
+
+groups:
+  # ---------- CAPACITY (disk TTF + KV/UMA headroom) via predict_linear ----------
+  - name: dgx_capacity
+    rules:
+      # Disk projected-full <4h
+      - alert: DiskWillFillSoon
+        expr: predict_linear(node_filesystem_avail_bytes{mountpoint=~"/|/data.*"}[6h], 4*3600) < 0
+        for: 5m                # debounce spikes (Brazil canonical pattern)
+        labels: { severity: warning }
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} projected full <4h"
+          description: "predict_linear slope says free space exhausts within the 4h horizon"
+
+      # Disk projected-full <6h
+      - alert: DiskWillFillNow
+        expr: predict_linear(node_filesystem_avail_bytes{mountpoint=~"/|/data.*"}[6h], 6*3600) < 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} projected full <6h"
+
+      # KV cache approaching saturation (trend, not level)
+      - alert: KVCacheWillSaturate
+        expr: predict_linear(vllm:kv_cache_usage_perc[15m], 1800) > 0.95
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "KV cache on {{ $labels.instance }} projected to saturate within 30m"
+
+      # UMA (system RAM) headroom project exhausted <6h  (GB10: GPU headroom == /proc/meminfo)
+      - alert: UMAHeadroomExhausting
+        expr: predict_linear(node_memory_MemAvailable_bytes[30m], 6*3600) < 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "UMA mem available on {{ $labels.instance }} projected to hit 0 <6h"
+
+  # ---------- STORAGE (NVMe SMART + disk level) ----------
+  - name: dgx_storage
+    rules:
+      # Known DGX Spark "No NVMe Device" failure precursor
+      - alert: NVMeCriticalWarning
+        expr: (node_nvme_smart_critical_warning_available_spare
+               + node_nvme_smart_critical_warning_device_reliability) > 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "NVMe {{ $labels.device }} on {{ $labels.instance }} reports critical warning"
+          description: "smart critical_warning bit set; known failure precursor. Back up + stage replacement."
+
+      - alert: NVMeWearHigh
+        expr: node_nvme_smart_percentage_used > 85
+        for: 15m
+        labels: { severity: warning }
+        annotations: { summary: "NVMe {{ $labels.device }} wear {{ $value }}% ({{ $labels.instance }})" }
+
+      - alert: NVMeWearCritical
+        expr: node_nvme_smart_percentage_used > 95
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "NVMe {{ $labels.device }} at {{ $value }}% — replace now" }
+
+      # Disk usage level (complement to the forecast rules above)
+      - alert: DiskSpaceHigh
+        expr: (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+                   / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) * 100 > 85
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "Disk {{ $labels.mountpoint }} > 85% ({{ $value }}%) on {{ $labels.instance }}" }
+
+  # ---------- THERMAL (GB10 throttle line ~96–97°C) ----------
+  # Uses exporter's nvidia-smi/thermal_zone temp (DCGM NOT available on GB10).
+  - name: dgx_thermal
+    rules:
+      - alert: GPUHot
+        expr: dgx_gpu_temperature_celsius > 92
+        for: 3m
+        labels: { severity: warning }
+        annotations: { summary: "GPU {{ $labels.instance }} temp {{ $value }}C" }
+
+      - alert: GPUThrottle
+        expr: dgx_gpu_temperature_celsius > 96
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "GPU {{ $labels.instance }} at {{ $value }}C — throttling risk" }
+
+  # ---------- POWER FAULT / SM-CLOCK COLLAPSE (USB-C PD under-supply) ----------
+  # Discriminator: SM clock crushed to <45% of max WHILE util>80 AND no corrective throttle reason
+  # => sticky-clock / USB-C PD under-supply fault, NOT thermal. (pynvml throttle flags replace DCGM.)
+  - name: dgx_power_fault
+    rules:
+      - alert: SMClockCollapse
+        expr: (dgx_gpu_sm_clock_mhz / clamp_min(dgx_gpu_sm_clock_max_mhz, 1)) < 0.45
+               and dgx_gpu_util_percent > 80
+               and (dgx_gpu_throttle_reason_thermal == 0)     # exclude real thermal
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "SM clock {{ $value | humanize }}x max on {{ $labels.instance }} at high util"
+          description: "Power delivery / USB-C PD under-supply fault suspected (no thermal throttle reason set)."
+
+  # ---------- FABRIC / RDMA (ConnectX-7 RoCE) ----------
+  - name: dgx_fabric
+    rules:
+      - alert: ConnectXLinkDown
+        expr: dgx_connectx_phys_state != 1        # 1 = Up (OFED phys_state)
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "ConnectX port {{ $labels.port }} down on {{ $labels.instance }}" }
+
+      - alert: RDMAOpenFabricsDead
+        expr: dgx_rdma_port_state != 4            # 4 = ACTIVE (IB port_state)
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "RDMA link inactive on {{ $labels.instance }}" }
+
+      - alert: RDMAErrorBurst            # score from hw_counters RATE deltas, not absolutes
+        expr: rate(dgx_rdma_port_xmit_wait_total[5m]) > (3 * avg_over_time(rate(dgx_rdma_port_xmit_wait_total[1h])) + scalar(rate(dgx_rdma_port_xmit_wait_total[1h])) )
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "RoCE congestion rising on {{ $labels.instance }}" }
+
+  # ---------- SERVICES ----------
+  - name: dgx_services
+    rules:
+      - alert: StatusExporterDown
+        expr: up{job="dgx_status"} == 0
+        for: 3m
+        labels: { severity: warning }
+        annotations: { summary: "dgx status exporter down on {{ $labels.instance }}" }
+
+      - alert: NodeExporterDown
+        expr: up{job="node"} == 0
+        for: 3m
+        labels: { severity: warning }
+        annotations: { summary: "node_exporter down on {{ $labels.instance }}" }
+
+      - alert: VllmEngineDead
+        expr: probe_success{job="blackbox"} == 0    # /health != 200 (503 = EngineDeadError)
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "vLLM /health != 200 on {{ $labels.instance }}"
+          description: "Inference engine unresponsive. (Sleep ≠ dead: check vllm:engine_sleep_state, not /health alone.)"
+
+      - alert: VllmAsleep        # engine in L1/L2 sleep (DGX known sleep→wake EngineCore crash bug) — advisory
+        expr: vllm:engine_sleep_state{model_name=~".+"} == 0
+        for: 5m
+        labels: { severity: info }
+        annotations: { summary: "vLLM engine asleep on {{ $labels.instance }} (L1 weights_offloaded / L2 discard_all)" }
+
+      - alert: FailedSystemdUnit
+        expr: node_systemd_unit_state{state="failed"} == 1
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "systemd unit {{ $labels.name }} failed on {{ $labels.instance }}" }
