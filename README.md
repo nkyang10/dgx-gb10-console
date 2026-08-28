@@ -43,6 +43,7 @@ dgx-status-api/
 │   ├── 狀態-12-深觀察與基準.md     # vLLM 深觀察 + 主動基準(Only maintenance)
 │   ├── 狀態-13-可靠與安全.md       # NVMe/container/Kernel + RDMA/PCIe + security
 │   ├── 實作-收集器設計.md          # 效能/常駐/snapshot/聚合
+│   ├── 實作-Log設計.md            # 睇/拎 log：來源/分類/排序/篩選/UI
 │   ├── 實作-架構分層圖.md          # ⭐ 分層/parallel/exposure review
 │   ├── 實作-多節點擴展.md          # ⭐ N 節點 cluster
 │   ├── 實作-部署與安全.md          # 部署/認證/歷史/監控Alert
