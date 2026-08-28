@@ -21,7 +21,7 @@
 - [x] R1 官方 DGX Dashboard 逆向（`127.0.0.1:11000` SSE/登入/字段）→ MD §7
 - [x] R2 vLLM /metrics 實務解析（parse→JSON、版本 pin NGC 26.x vs legacy、scrape cadence、failure 語義）→ MD §8
 - [x] R3 Collector 效能&常駐（各指令成本、三層 polling、daemon budget、唔打擾 vLLM）→ MD §9
-- [x] R4 部署方案（venv+systemd、systemd unit、Docker、2-node aggregator、install.sh）→ MD §10 + `deploy/`+`config/`+`scripts/`
+- [x] R4 部署方案（venv+systemd、systemd unit、Docker、2-node gateway、install.sh）→ MD §10 + `deploy/`+`config/`+`scripts/`
 - [x] R5 安全/歷史儲存/監控 alert（FastAPI auth、SQLite WAL schema、PromQL 警報）→ MD §11 + `docs/references/安全-監控-alert.md`
 - [x] 完整報告收倉：`docs/references/硬件-研究報告.md`、`docs/references/GitHub-生態研究報告.md`、`docs/references/安全-監控-alert.md`
 
@@ -30,7 +30,7 @@
 - [x] 綜合「邊啲數據有用」→ `docs/資料收集決定.md`（每資料寫明點攞+證明 repo+優先級）
 - [x] Recommended 最小集（§8）+ Alert 閾值（§9）+ 可偷工程模式（§10）
 - [x] ✅ 研究文件按 **data category 分拆**：`docs/狀態-0X-*.md`（7 類）＋ `docs/實作-*.md`（收集器/部署）+ `docs/00-總覽.md` 索引；舊大檔已刪
-- [x] ✅ 設計擴大到 **N 節點**：`config/config.yaml` 通用 `nodes[]` 註冊表 + `aggregation.pull`；`install.sh` 加 `--node-id/--mgmt-ip/--role`；新增 `docs/實作-多節點擴展.md`（星型聚合/端口分配/fabric 配對/加節點）
+- [x] ✅ 設計擴大到 **N 節點**：`config/config.yaml` 通用 `nodes[]` 註冊表 + `gateway.pull`；`install.sh` 加 `--node-id/--mgmt-ip/--role`；新增 `docs/實作-多節點擴展.md`（星型聚合/端口分配/fabric 配對/加節點）
 - [x] ✅ 加設計假設「**vLLM 喺 Docker container 入面行**」→ 記落 `00-總覽` Assumptions + `狀態-07` container 偵測段 + README/config
 - [x] ✅ 開始累積設計 **SPEC**：`docs/SPEC.md` = 單一 source of truth（目標/Assumptions 註冊表 ASM-xx/需求/架構/資料SPEC/API/deploy/開放決定/變更記錄）——之後每加規格/假設都 append 落去
 - [x] ✅ 加「**性能收集**」(ASM-14)：新增 `docs/狀態-08-性能.md`（推理 tok/s/latency/P95/RPS + 系統 net/disk/util；窗 10–60s 度率）+ SPEC/索引更新

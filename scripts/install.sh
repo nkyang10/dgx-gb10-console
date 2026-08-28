@@ -3,7 +3,7 @@
 # (Ubuntu 24.04 noble, ARM64, Python 3.12, systemd).
 #
 # Usage (N-node cluster):
-#   sudo ./scripts/install.sh --role=aggregator --node-id=dgx-01 --mgmt-ip=10.0.20.10   # Node-A (aggregator)
+#   sudo ./scripts/install.sh --role=gateway --node-id=dgx-01 --mgmt-ip=10.0.20.10   # Node-A (gateway)
 #   sudo ./scripts/install.sh --role=exporter    --node-id=dgx-02 --mgmt-ip=10.0.20.11   # Node-B (leaf)
 #   sudo ./scripts/install.sh --role=exporter    --node-id=dgx-03 --mgmt-ip=10.0.20.12   # Node-C (leaf) ...
 #   sudo ./scripts/install.sh --update                                 # 升級
@@ -27,7 +27,7 @@ DATA_DIR="/var/lib/dgx-status"
 
 # ---- CLI flags --------------------------------------------------------------
 MODE="host"          # host|container
-ROLE=""              # aggregator|exporter
+ROLE=""              # gateway|exporter
 NODE_ID=""           # e.g. dgx-01 (optional)
 MGMT_IP=""           # e.g. 10.0.20.10 (optional)
 
@@ -97,7 +97,7 @@ ensure_env_file() {
     cat >"$ENV_FILE" <<EOF
 DGX_STATUS_TOKEN=CHANGE_ME_openssl_rand_hex_32
 DGX_STATUS_PORT=9101
-DGX_STATUS_ROLE=${ROLE:-aggregator}
+DGX_STATUS_ROLE=${ROLE:-gateway}
 DGX_STATUS_NODE_ID=${NODE_ID:-dgx-01}
 DGX_STATUS_MGMT_IP=${MGMT_IP:-10.0.20.10}
 EOF
@@ -151,7 +151,7 @@ case "$MODE" in
     ensure_env_file
     create_venv
     # For N-node setup, copy the SAME config.yaml to all hosts, then set per-host:
-    #   Node-A: node_id/role=aggregator + aggregation.pull=all-except-self
+    #   Node-A: node_id/role=gateway + gateway.pull=all-except-self
     #   Node-B..N: node_id=<id>, role=exporter (see docs/實作-多節點擴展.md)
     install -m 0644 "${PROJECT_DIR}/config.yaml" "$CONFIG_FILE"
     install_systemd

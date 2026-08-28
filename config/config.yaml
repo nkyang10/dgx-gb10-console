@@ -1,19 +1,19 @@
 # config.yaml — N 節點 DGX cluster 通用設定（聚合器 + N 台 exporter）
 #
-# 設計：支援 2..N 部 DGX。一部做 aggregator（拉晒其餘），其餘每部做 exporter（leaf）。
+# 設計：支援 2..N 部 DGX。一部做 gateway（拉晒其餘），其餘每部做 exporter（leaf）。
 #
 # 網絡拓撲（每部 DGX Spark）：
 #   - 1x 10GbE RJ-45 = management/OOB 網（Node-A/B/C... 插同一個 switch）
 #   - 2x 200GbE QSFP56 (ConnectX-7) = compute fabric（唔用嚟做 mgmt）
 #
 # 角色：
-#   - aggregator: 部機跑 exporter 之餘，仲拉晒 peers.nodes[] 其他部
+#   - gateway: 部機跑 exporter 之餘，仲拉晒 peers.nodes[] 其他部
 #   - exporter   : 只暴露本地 /metrics（leaf）
 # 角色由 env DGX_STATUS_ROLE 覆寫（見 /etc/dgx-status/status.env）；本檔全 cluster 共用。
 
 cluster:
   name: "dgx-cluster"
-  role: "aggregator"          # aggregator | exporter（本機角色，install.sh/status.env 覆寫）
+  role: "gateway"          # gateway | exporter（本機角色，install.sh/status.env 覆寫）
   node_id: "dgx-01"           # 本機 id（必須喺 nodes[] 出現）
   mgmt_cidr: "10.0.20.0/24"   # mgmt 網段（auto-discovery + 來源限制用）
 
@@ -22,7 +22,7 @@ cluster:
 nodes:
   - id: "dgx-01"
     mgmt_ip: "10.0.20.10"
-    role: "aggregator"
+    role: "gateway"
     port: 9101                # 本 exporter 端口
     vllm_port: 8000           # vLLM API 端口（呢部行嘅 model）
   - id: "dgx-02"
@@ -36,16 +36,21 @@ nodes:
   #   port: 9101
   #   vllm_port: 8002
 
-# ---- 聚合（aggregator 點拉其餘節點）--------------------------------------
-aggregation:
-  # aggregator 拉邊啲：all-except-self（預設，拉晒 nodes[] 唔係本機嗰啲）
-  # 或明確列：pull: ["dgx-02","dgx-03"]
+# ---- 聚合（gateway 點拉其餘節點）--------------------------------------
+# inter-node 通訊 = MCP（ASM-22）：gateway 做 MCP client，每節點 secured MCP server，
+# streamable HTTP + Bearer token。基本保安 = 每 node 各自 token（唔好全 cluster 同一個）。
+gateway:
+  transport: "mcp"           # mcp（default）| http（legacy plaintext，唔建議）
+  # 拉邊啲：all-except-self（預設，拉晒 nodes[] 唔係本機嗰啲）或明確列
   pull: "all-except-self"
   # 自動發現（可選，預設 off——predictable homelab 用 static nodes[] 最穩）
   auto_discover: false
   mcast_group: "224.0.0.251"
   mcast_port: 5353
   connect_timeout_s: 5
+  mcp:
+    tls: "auto"              # off | auto | mTLS（離信任邊界用 mTLS / WireGuard）
+    token_env: "DGX_STATUS_TOKEN"   # 每 node 各自一份，系統唔共用
   # Agentless SSH fallback（如果某葉唔 run exporter——唔建議，寧願每部都 run exporter）
   remote_collect:
     enabled: false
@@ -59,6 +64,21 @@ http:
   port: 9101                 # DGX_STATUS_PORT env 覆寫
   health_path: "/health"
   metrics_path: "/metrics"
+
+# ---- Web 管理後台（gateway 對用戶，router 式）----------------------------
+ui:                            # OD-2/ASM-21：只喺 gateway 開
+  enabled: true
+  path: "/ui"
+  static_dir: "/opt/dgx-status/ui"    # serve 嘅 SPA（HTML/JS）位置
+  live_refresh_s: 5           # 輪詢 /cluster.json 更新節奏
+
+# ---- 儲存 ----------------------------------------------------------------
+storage:                        # OD-1：SQLite 做歷史/回溯
+  engine: "sqlite"
+  sqlite:
+    path: "/var/lib/dgx-status/status.db"   # WAL
+    retention_days: 30
+  live: "in-memory"            # live snapshot（唔落 db，最快）
 
 # ---- 認證（token 只喺 /etc/dgx-status/status.env，root 0600）---------------
 auth:

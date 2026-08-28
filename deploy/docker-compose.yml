@@ -18,7 +18,7 @@ services:
     container_name: dgx-status-exporter
     restart: unless-stopped
     # network_mode host => binds 0.0.0.0:9101 on the host netns, so the
-    # aggregator (Node-A) can reach this exporter at <nodeB-mgmt-ip>:9101.
+    # gateway (Node-A) can reach this exporter at <nodeB-mgmt-ip>:9101.
     network_mode: host
     pid: "host"               # read host /proc/<pid> for per-process stats
     privileged: false

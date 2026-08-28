@@ -120,7 +120,7 @@ footer(s,2,TOTAL)
 s = add_slide()
 tf = textbox(s, Inches(1.0), Inches(0.55), SW-Inches(2), Inches(0.8))
 para(tf, "產品：一部 HTTP API 睇晒成個集群", 30, bold=True, color=INK, first=True, space_after=6)
-para(tf, "N 節點星型架構 · 每部 DGX 一個 exporter · 一部 aggregator 合併", 14, color=MUTED, name=FONT_B)
+para(tf, "N 節點星型架構 · 每部 DGX 一個 exporter · 一部 gateway 合併", 14, color=MUTED, name=FONT_B)
 # 4 feature cards
 cards = [
     ("硬體健康", "GPU / CPU / 記憶體(UMA) / 溫度 / 功率\n過熱降頻矩陣·節流偵測 · NVMe 壽命"),
@@ -144,9 +144,9 @@ s = add_slide()
 tf = textbox(s, Inches(1.0), Inches(0.6), SW-Inches(2), Inches(0.8))
 para(tf, "由 2 部到 N 部，輕鬆擴展", 30, bold=True, color=INK, first=True, space_after=6)
 para(tf, "星型架構 · 每部節點都係一等公民 · 加機只需 3 步", 14, color=MUTED, name=FONT_B)
-# diagram: aggregator center hub + 3 leaves
+# diagram: gateway center hub + 3 leaves
 rect(s, Inches(4.9), Inches(2.1), Inches(3.5), Inches(1.2), INK)
-tf2=textbox(s, Inches(4.9), Inches(2.45), Inches(3.5), Inches(0.6)); para(tf2,"Aggregator (dgx-01)", 18, bold=True, color=WHITE, align=PP_ALIGN.CENTER, first=True)
+tf2=textbox(s, Inches(4.9), Inches(2.45), Inches(3.5), Inches(0.6)); para(tf2,"Gateway (dgx-01)", 18, bold=True, color=WHITE, align=PP_ALIGN.CENTER, first=True)
 rect(s, Inches(1.6), Inches(4.4), Inches(3.0), Inches(1.0), RGBColor(0xE9,0xE4,0xD8))
 rect(s, Inches(5.2), Inches(4.4), Inches(3.0), Inches(1.0), RGBColor(0xE9,0xE4,0xD8))
 rect(s, Inches(8.8), Inches(4.4), Inches(3.0), Inches(1.0), RGBColor(0xE9,0xE4,0xD8))
@@ -260,7 +260,7 @@ tf = textbox(s, Inches(1.0), Inches(0.55), SW-Inches(2), Inches(0.8))
 para(tf, "架構 — 分層清晰，通訊安全", 30, bold=True, color=INK, first=True, space_after=6)
 tf2 = textbox(s, Inches(1.0), Inches(1.7), Inches(6.0), Inches(4.8))
 bullet(tf2, "L4 Consumer：你部機 / Prometheus / Grafana")
-bullet(tf2, "L3 API：aggregator（/health · /cluster.json · /metrics · /logs · /control") 
+bullet(tf2, "L3 API：gateway（/health · /cluster.json · /metrics · /logs · /control") 
 bullet(tf2, "L2 Exporter：每部 DGX 一個 :9101（一等公民）")
 bullet(tf2, "L1 Collectors：hardware · system · network · services · vllm（並行）")
 bullet(tf2, "L0 數據源：nvidia-smi / proc / sys / docker / vLLM / RDMA")
@@ -305,7 +305,7 @@ tf3 = textbox(s, Inches(8.0), Inches(1.8), Inches(4.3), Inches(4.6))
 tc=rect(s, Inches(8.0), Inches(1.85), Inches(4.3), Inches(2.2), RGBColor(0xF0,0xEC,0xE3)); tc.line.color.rgb=LINE
 tf3b=textbox(s, Inches(8.4), Inches(2.2), Inches(3.5), Inches(1.6))
 para(tf3b,"想擴到大型集群？",16,bold=True,color=INK,first=True,space_after=6)
-para(tf3b,"N 前預設單 aggregator；N 大到可 federation / 多級",13,color=DARK,name=FONT_B)
+para(tf3b,"N 前預設單 gateway；N 大到可 federation / 多級",13,color=DARK,name=FONT_B)
 footer(s,12,TOTAL)
 
 # ============ SLIDE 13: Value summary ============

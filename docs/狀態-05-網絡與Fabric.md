@@ -7,7 +7,7 @@
 
 ## 物理拓撲（已確認）
 
-- **10GbE RJ-45**：一般/oob 網絡（`enp2s0`/`enp3s0` 系）——**管理/aggregator 用呢條，唔係 fabric**
+- **10GbE RJ-45**：一般/oob 網絡（`enp2s0`/`enp3s0` 系）——**管理/gateway 用呢條，唔係 fabric**
 - **ConnectX-7 200Gbps**：fabric。⚠️ GB10 SoC 只有 PCIe Gen5 x4/device → NVIDIA 用 **ConnectX-7 Multi-Host 模式** bond 兩個 x4（各 100G）做一個 200G physical port → OS 顯示 **4 個接口**（2 port × 2 root complex）：
   - `enp1s0f0np0` + `enP2p1s0f0np0`（port 1）；`enp1s0f1np1` + `enP2p1s0f1np1`（port 2）
 - **GPU Direct RDMA 唔支援**；兩節點間 fabric 常接做 `bond0`（`balance-xor`，單條 DAC/QSA-28）

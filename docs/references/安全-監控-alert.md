@@ -124,7 +124,7 @@ For 2 nodes the SQLite+pynvml path is a single dependency, transactional, CRASH-
 
 **Recommendation: run Prometheus + Grafana (+ optional Loki) as containers (podman/docker) on Node-A**, on the mgmt LAN:
 - Prometheus scrapes both node exporters + both vLLM endpoints + both our status exporters.
-- Node-A is already the aggregator for the API; co-locating the stack avoids a third machine and keeps the num-link traffic local to the 10GbE LAN.
+- Node-A is already the gateway for the API; co-locating the stack avoids a third machine and keeps the num-link traffic local to the 10GbE LAN.
 - **Grafana binds to mgmt LAN** (or localhost + SSH tunnel) — never 0.0.0.0 on public NIC.
 
 ### prometheus.yml — scrape_config snippet

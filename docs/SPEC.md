@@ -9,13 +9,17 @@
 
 ## 1. 目標 / 範圍 / 非目標
 
-**目標**：一個 HTTP API，畀另一部機以 HTTP 攞到 **N 部 DGX Spark（GB10 Grace Blackwell，DGX OS Ubuntu 24.04 ARM64）** 集群狀態。
+**目標**：一個 **Gateway**，對外兩面 —— **Web 管理後台**（router 式：監測＋控制）畀用戶／管理員，＋ **HTTP API**（agent／自動化撈）。背後攞到 **N 部 DGX Spark（GB10 Grace Blackwell，DGX OS Ubuntu 24.04 ARM64）** 集群狀態。
 
 **範圍**（狀態分三類 + 性能）：
 - **硬體**：GPU、CPU、記憶體(UMA)、溫度、功耗、時脈/util
 - **軟體/系統**：OS、systemd 服務、Docker、process、磁碟、網絡/fabric
 - **vLLM**（行緊嘅 software，喺 Docker）：running/waiting、KV cache、throughput、health、已載入 models
 - **性能（Performance）**：推理吞吐/latency（tok/s、TTFT/ITL/e2e/P95、RPS、KV、prefix hit）＋ 系統性能（net B/s、disk IOPS、CPU/GPU util）→ `狀態-08`
+
+**產品兩面（Gateway 對外）**（ASM-21）：
+- **🟩 Web 後台（用戶）**：router 式 admin console —— 節點列表、即時圖表、告警、控制櫃（vue on-device 監測＋可控制），SQLite 歷史回溯。
+- **🟦 Agent API（自動化）**：簡潔 read-only endpoint（`/cluster.json`、`/metrics`、`/logs`）俾 agent monitor ＋ 受控 control。
 
 **非目標（明確唔做）**：
 - 完整 cAdvisor / Loki / 38-panel Grafana 堆棧（純 status API 過重；要 dashboard 先另加）
@@ -30,7 +34,7 @@
 | ID | Assumption | 狀態 |
 |---|---|---|
 | **ASM-01** | **vLLM 喺 Docker container 入面行**（Docker + NVIDIA Container Toolkit，DGX OS 內建）。偵測 = `docker ps --filter name=vllm` → 攞 publish port → HTTP 撈 `/metrics`/`/health`/`/v1/models`。**唔當** bare-metal `vllm serve`。 | ✅ effective |
-| **ASM-02** | **N 節點 cluster**（≥2；2 部=基本部署）：一部 **aggregator** 拉晒 `nodes[]` 唔係自身嗰啲，一部一寫 **exporter**（leaf）。星型。 | ✅ effective |
+| **ASM-02** | **N 節點 cluster**（≥2；2 部=基本部署）：一部 **gateway** 拉晒 `nodes[]` 唔係自身嗰啲，一部一寫 **exporter**（leaf）。星型。 | ✅ effective |
 | **ASM-03** | **每節點都係一等公民**，各自 run exporter；加/減一部唔影響其他。 | ✅ effective |
 | **ASM-04** | **Fabric（ConnectX-7 RoCE）淨係畀 NCCL/compute**；status API 經 **10GbE mgmt IP** 拉。 | ✅ effective |
 | **ASM-05** | 本機**只備內容，唔裝唔 test**；完成後搬去 DGX 由用戶安裝。 | ✅ effective |
@@ -40,8 +44,8 @@
 | **ASM-09** | **三層 polling tier**：fast 2–5s（GPU/CPU/RAM/thermal/netdev）、slow 30–60s（docker/df/ethtool/RDMA/systemctl）、slowest 60–120s（NVMe SMART）。 | ✅ effective |
 | **ASM-10** | **in-memory `ClusterSnapshot`**：/metrics、/api/snapshot、WS 都係同一個 snapshot 嘅 cached projection（sparktop 模式）。 | ✅ effective |
 | **ASM-11** | **關節點 graceful**：node down → `status:"offline"`+`error_message`，request 唔 5xx。 | ✅ effective |
-| **ASM-12** | **儲存/API 呈現方式未定**（開放決定，見 §8）。 | ⏸️ 開放 |
-| **ASM-13** | **聚合安全（含 inter-node communication）**：token 用 env（`DGX_STATUS_TOKEN`）唔喺 argv；Bind mgmt-LAN；API read-only。**站與站 hop（aggregator→exporter）唔好淨係 plaintext HTTP+shared token** —— default = 隔離 mgmt VLAN + 每 node 自己 token；要離信任邊界**用 mTLS 或加密 tunnel（WireGuard/Tailscale）**；vLLM :8000 預設 0.0.0.0 要 firewall 收返做 inside。 | ✅ effective |
+| **ASM-12** | **儲存/API 呈現方式** → 已定（§8 OD-1/2）：**SQLite 做歷史/回溯**（WAL，8h–30d）＋ in-memory snapshot 做 live；Agent API = JSON REST + Prometheus text；User = **Web admin console**。 | ✅ effective（取代舊「未定」） |
+| **ASM-13** | **聚合安全（含 inter-node communication）**：token 用 env（`DGX_STATUS_TOKEN`）唔喺 argv；Bind mgmt-LAN；API read-only。**站與站 hop（gateway→exporter）用 MCP（ASM-22）**：分離信任邊界用 mTLS / WireGuard；vLLM :8000 預設 0.0.0.0 要 firewall 收返做 inside。 | ✅ effective |
 | **ASM-14** | **系統要 gather 性能資訊**：推理性能（vLLM tok/s、TTFT/ITL/e2e、RPS、KV、prefix hit）+ 系統性能（net B/s、disk IOPS、CPU/GPU util）——**由 counter/histogram 喺時間窗度 rate/latency，唔抄即時數**。 | ✅ effective |
 | **ASM-15** | **熱降頻觀測用矩陣（四樣夾埋）：溫度 + SM 時脈比例 + throttle reason 邊隻 bit + 負載 util**——單靠溫度或少時脈判唔到；throttle reason 分「熱」(hw/sw_thermal) vs「功率」(sw_power_cap) vs「GB10 卡死」(無 reason 但 clock<45%)。 | ✅ effective |
 | **ASM-16** | **能量/成本追蹤**：`spbm` hwmon（`power1 sys_total`/`power8 gpu` µW、`energy1 pkg`/`energy4 gpu` µJ，wrap-safe）→ kWh/day + $/day（R config）；token 會計 per(model,day)→per-model $ + cache 慳。 | ✅ effective |
@@ -49,6 +53,8 @@
 | **ASM-18** | **vLLM 控制（v0.28.0 source 驗證）**：所有原生控制端點都 gate 喺 `VLLM_SERVER_DEV_MODE=1`；**冇 per-request queue listing**（要靠 proxy `/v1/responses` 追）；status API **預設 read-only**，控制 = **opt-in 自己 proxy**（abort-by-id / pause(keep|wait) / resume / expose is_paused|is_sleeping）。⚠️ **GB10 sleep→wake crash #50011** → 唔 surface sleep/wake 1–2。 | ✅ effective |
 | **ASM-19** | **額外收集（D+C+E+F，全部 research 完成）**：🟢 D2 container OOM/restart、F1/F2 security snapshot+service diff、E1 RDMA 擁塞 rate；🟡 D1 NVMe 壽命（×1000 單位）、D3 journalctl markers、D4b throttle timeline；🔵 B3 per-model（已有 label）、B2 /load、B4 --kv-cache-metrics-sample、C4 被動 throttle、C3 稀疏 TTFT probe；⚠️ **主動基準 C1/C2 只喺 maintenance window（唔 serving）**；E2 冇 NVLink 可攞（單 SoC），用 PCIe counter。 | ✅ effective |
 | **ASM-20** | **Log 睇/拎（read-only）**：分兩層 —— 輕量 markers（`{count,last_ts}` 入 snapshot 警報）＋ on-demand tail（`GET /api/nodes/{n}/logs/{source}?lines&since&filter`，source=vllm\|kernel\|services\|<ctr>，經 mgmt IP 去節點 `journalctl`/`docker logs`）。**⚠️ vLLM request log 可含 prompts/tokens → log endpoint 要 auth**（唔似 /health）；唔好 log token；限行數/filter。Loki 只係要全文搜尋先加。 | ✅ effective |
+| **ASM-21** | **Gateway 對外兩面**：**Web 管理後台**（router 式：監測＋控制，serve on `/ui`）畀用戶；**Agent API**（read-only `/cluster.json`/`/metrics`/`/logs` ＋ 受控 control）畀自動化。兩面共用同一 guard（auth + read-only default；control opt-in）。 | ✅ effective |
+| **ASM-22** | **inter-node 通訊用 MCP（基本保安）**：每節點行一個 **secured MCP server**（streamable HTTP + **Bearer token**）expose collector 工具（`get_hardware_status`、`get_vllm_status`、`read_log`、`control_*`…）；gateway 用 **MCP client** 撈各節點（替代裸 HTTP exporter）。基本保安 = 每 node 各自 token + TLS（離信任邊界用 mTLS/WireGuard）。 | ✅ effective |
 
 （將來新假設繼續加，ID 遞增。）
 
@@ -69,15 +75,15 @@
 ## 4. 架構（N 節點，星型）
 
 ```
-aggregator(dgx-01, :9101) ──(10GbE mgmt switch)──▶ dgx-02..N (exporter, :9101)
+gateway(dgx-01, :9101) ──(10GbE mgmt switch)──▶ dgx-02..N (exporter, :9101)
      │                                                    │
      └─ 拉晒 nodes[] 其餘 (HTTP :9101, Bearer token)      └─ 本地收集 /proc,/sys,nvidia-smi,...
      └─ 合併成 ClusterSnapshot → /health /cluster.json /metrics
 ConnectX-7 200G fabric（全網 mesh / switch）= 只畀 NCCL/compute
 ```
-- 元件：每節點 exporter daemon（FastAPI，venv+systemd）；一部 aggregator（節點 0 上）。
+- 元件：每節點 exporter daemon（FastAPI，venv+systemd）；一部 gateway（節點 0 上）。
 - 收集器：`hardware.py`（GPU/UMA）、`system.py`（CPU/RAM/disk/thermal/power）、`network.py`（netdev/fabric/RDMA）、`services.py`（systemd/docker）、`vllm.py`（Docker 偵測→/metrics）。
-- Startup：aggregator 讀 `nodes[]` → 為每個遠端 leaf 開 async poll loop（fast/slow tier）→ 寫入 snapshot。
+- Startup：gateway 讀 `nodes[]` → 為每個遠端 leaf 開 async poll loop（fast/slow tier）→ 寫入 snapshot。
 
 ---
 
@@ -102,12 +108,14 @@ Alert 閾值全集：`docs/資料收集決定.md` §9 + `實作-部署與安全.
 
 ```
 GET /health            → {status:"ok"}（liveness，唔 auth）
-GET /cluster.json      → {schema_version:"1.0", nodes:[NodeMetrics]}   # aggregator
+GET /cluster.json      → {schema_version:"1.0", nodes:[NodeMetrics]}   # gateway，agent 用
 GET /metrics           → Prometheus text（cached projection）
-GET /status            → 聚合 status（可選；資料格式未定 → §8）
+GET /logs/{node}/{src} → 日誌 tail（auth）
+GET /ui                → Web 管理後台（router 式 HTML SPA，serve by gateway）   # 用戶用
+POST /control/*        → 受控控制（opt-in；OD-4）
 NodeMetrics = { node_name, status: online|offline, cpu, ram, gpus[], disks[], power, network, services, vllm, error_message }
 ```
-> ⏸️ `/status` 嘅 JSON 細則（indde字段、端口、auth）屬「儲存/API 呈現方式」開放決定。
+> Agent API 以 `/cluster.json` + `/metrics` 為主（簡潔、read-only）；Web console `/ui` serve 前端的 SPA，輪詢 `/cluster.json` 即時展示與控制。
 
 ---
 
@@ -124,13 +132,14 @@ NodeMetrics = { node_name, status: online|offline, cpu, ram, gpus[], disks[], po
 
 ## 8. 開放決定（⏳ 等用戶）
 
-| # | 決定 | 候選 |
+| # | 決定 | 狀態 |
 |---|---|---|
-| OD-1 | **儲存/攞資料落 API 嘅方法** | 即時撈 vs 背景輪詢 snapshot（in-memory/SQLite）vs exporter /metrics 掛 Prometheus |
-| OD-2 | **API 呈現** | JSON REST vs Prometheus text vs SSE/WS live |
-| OD-3 | 端口（預設 9101）、認證開關、N 大型時 federation vs 多級 aggregator | — |
-| OD-4 | **vLLM 控制模式開唔開**（opt-in guarded proxy）：abort-by-id / pause/resume ／ 或維持 read-only | §狀態-11 有可行性 + GB10 sleep-wake 風險 |
-| OD-5 | **Log 暴露深度**：淨 markers + on-demand tail（推薦）／ 定要加 Loki 全文搜尋 | ASM-20 |
+| OD-1 | **儲存**：SQLite 歷史/回溯（WAL，8h–30d）＋ in-memory snapshot 做 live | ✅ **已定（SQLite）** |
+| OD-2 | **API 呈現**：Agent = JSON REST + Prometheus text；User = Web admin console（`/ui`） | ✅ **已定** |
+| OD-3 | 端口（預設 9101）、認證開關、N 大型時 federation vs 多級 gateway | ⏳ |
+| OD-4 | **vLLM 控制模式開唔開**（opt-in guarded proxy）：abort-by-id / pause/resume ／ 或維持 read-only | ⏳（§狀態-11 有可行性 + GB10 sleep-wake 風險） |
+| OD-5 | **Log 暴露深度**：淨 markers + on-demand tail（推薦）／ 定要加 Loki 全文搜尋 | ⏳ |
+| OD-6 | **UI 技術棧**：輕量 HTML/JS SPA（推薦）vs Flutter Web（要原身 apps 先生） | ⏳ |
 
 ---
 
@@ -150,7 +159,9 @@ NodeMetrics = { node_name, status: online|offline, cpu, ram, gpus[], disks[], po
 | 2026-08-28 | **ASM-19：額外收集全部完成**（B deep-obs / C benchmarks / D health / E network-deep / F security） | `狀態-12`+`狀態-13` |
 | 2026-08-28 | **ASM-20：Log 睇/拎**（read-only：markers + on-demand tail；auth；vLLM log 敏感） | SPEC §6 + OD-5 |
 | 2026-08-28 | **Final verification pass（6 thread）**：driver→580.159.03/OS7.5.0；**vLLM Rust rewrite**（engine_sleep metric→/is_sleeping、per-request flag 取代、counter 冇 _total、engine label）；DGX Dashboard UMA bug 已 fix；schema 產物收 references | `狀態-01/03/07/12` + `references/` |
-| 2026-08-28 | **Inter-node communication secure**：ASM-13 強化 = 內部 hop 唔淨 plaintext+shared token（隔離 mgmt VLAN + per-node token；離信任邊界用 mTLS/WireGuard/Tailscale）；vLLM :8000 收做 inside | `實作-部署與安全` §2 |
+| 2026-08-28 | **Inter-node communication secure**：ASM-13 強化 + **改用 MCP（ASM-22）**；vLLM :8000 收做 inside | `實作-部署與安全` §2 |
+| 2026-08-28 | **Gateway 對外兩面（ASM-21）+ OD-1/2 已定**：Web admin console `/ui`（router 式）＋ Agent API；**SQLite** 歷史 | SPEC §1/§6/§8 |
+| 2026-08-28 | **inter-node 用 MCP + 基本保安（ASM-22）**：每節點 secured MCP server expose collector tools，gateway 用 MCP client 撈 | `實作-多節點擴展` + `架構分層圖` |
 
 ---
 

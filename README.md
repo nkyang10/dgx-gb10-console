@@ -1,18 +1,23 @@
-# DGX Status API
+# DGX Status API ／ DGX GB10 Console
 
-HTTP API 畀另一部機攞取 **N 部 DGX Spark（GB10 Grace Blackwell）cluster**（2 部即基本部署）狀態。
+**Gateway** 對外兩面，攞取 **N 部 DGX Spark（GB10 Grace Blackwell）cluster**（2 部基本部署）狀態：
 
-- **硬體狀態**：GPU/CPU/記憶體(RAM)/溫度/功耗/時脈/util
-- **軟體系統狀態**：OS、systemd 服務、Docker、process、記憶體、磁碟、網絡/fabric
-- **vLLM 狀態**：running/waiting requests、KV cache 用率、throughput、health、已載入 models
+- **🟦 Agent API**：簡潔 read-only endpoint（`/cluster.json`、`/metrics`、`/logs`）＋ 受控 control —— 方便 agent／自動化 monitor。
+- **🟩 Web 管理後台**（`/ui`，router 式）：監測 dashboard ＋ 控制 ＋ SQLite 歷史回溯 —— 方便用戶睇＆管。
 
-架構：**一部 aggregator 拉晒 `nodes[]` 其餘（星型）**，支援 N 節點（詳見 `docs/實作-多節點擴展.md`）。
+架構：一部 **gateway** 拉晒 `nodes[]` 其餘（星型）；**inter-node 用 secured MCP**（streamable HTTP + Bearer token）；支援 N 節點（詳見 `docs/實作-多節點擴展.md` + `實作-架構分層圖.md`）。
 
 **Assumption：vLLM 喺 Docker container 入面行**（Docker + NVIDIA Container Toolkit）——用 `docker ps` 偵測 + 攞 publish port 再撈。
 
+- **硬體狀態**：GPU/CPU/記憶體(UMA)/溫度/功耗/時脈/util
+- **軟體系統狀態**：OS、systemd 服務、Docker、process、記憶體、磁碟、網絡/fabric（RDMA）
+- **vLLM**：running/waiting、KV cache、throughput、health、已載入 models
+- **性能**：吞吐/latency（tok/s、TTFT/ITL/e2e/P95）、成本/容量、熱降頻、告警
+
 ## 狀態
-- ✅ **Phase 0 — 研究**（完成）：4+5+10 條平行研究 thread，已整合並**按 data category 分拆**每類一個 MD（`docs/狀態-*.md`）
-- 🏗️ Phase 1 + — 已備好部署產物（deploy/config/scripts），等用戶定「儲存/API 呈現方式」後落 code
+- ✅ **Phase 0 — 研究**（完成）：4+5+10+… 平行研究 thread，按 data category 分拆每類一個 MD（`docs/狀態-*.md`）
+- ✅ **Phase 1 — 設計決策落地**：Gateway 兩面（Agent API + Web 後台 `/ui`）、SQLite、inter-node MCP（見 SPEC ASM-12/21/22）
+- 🏗️ **Phase 2 — code**：照 SPEC 寫 `src/` collectors + API + Web console（等用戶定剩餘 OD-3/4/5/6）
 - 📋 完整待辦：見 [TODO.md](./TODO.md)
 
 ## Project 結構
@@ -47,7 +52,7 @@ dgx-status-api/
 │       ├── GitHub-生態研究報告.md
 │       └── 安全-監控-alert.md
 ├── config/
-│   └── config.yaml              # 2 節點 aggregator/exporter 設定
+│   └── config.yaml              # 2 節點 gateway/exporter 設定
 ├── src/
 │   ├── main.py                  # FastAPI / API 入口（待定方案）
 │   ├── collectors/              # hardware / system / network / services / vllm
