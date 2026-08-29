@@ -163,6 +163,7 @@ NodeMetrics = { node_name, status: online|offline, cpu, ram, gpus[], disks[], po
 | 2026-08-28 | **Gateway 對外兩面（ASM-21）+ OD-1/2 已定**：Web admin console `/ui`（router 式）＋ Agent API；**SQLite** 歷史 | SPEC §1/§6/§8 |
 | 2026-08-28 | **inter-node 用 MCP + 基本保安（ASM-22）**：每節點 secured MCP server expose collector tools，gateway 用 MCP client 撈 | `實作-多節點擴展` + `架構分層圖` |
 | 2026-08-28 | **睇/拎 log 完整設計**：來源目錄(位置/格式/內容)+分類(6類)+排序+篩選+正規化 schema+API+/ui Logs 分頁 | `實作-Log設計.md` |
+| 2026-08-28 | **管理平台產品/UX 設計**：personas、8 分頁、5 條 key workflow、互動 pattern、日常使用案例、落地對應 | `產品-平台設計.md` |
 
 ---
 
